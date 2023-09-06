@@ -1,0 +1,82 @@
+##### start trigger Don't edit it manually, Please do edit set-trigger-rules.py ####
+trigger:
+  branches:
+    include:
+    - main
+    - rel-*
+  paths:
+    exclude:
+    - docs/**
+    - README.md
+    - CONTRIBUTING.md
+    - BUILD.md
+    - 'js/web'
+    - 'onnxruntime/core/providers/js'
+pr:
+  branches:
+    include:
+    - main
+    - rel-*
+  paths:
+    exclude:
+    - docs/**
+    - README.md
+    - CONTRIBUTING.md
+    - BUILD.md
+    - 'js/web'
+    - 'onnxruntime/core/providers/js'
+#### end trigger ####
+
+jobs:
+- job: 'build'
+  pool: 'onnxruntime-Win2022-GPU-T4'
+  variables:
+    MsbuildArguments: '-detailedsummary -maxcpucount -consoleloggerparameters:PerformanceSummary'
+    EnvSetupScript: setup_env_trt.bat
+    buildArch: x64
+    BuildConfig: 'RelWithDebInfo'
+    skipComponentGovernanceDetection: true
+    TODAY: $[format('{0:dd}{0:MM}{0:yyyy}', pipeline.startTime)]
+  timeoutInMinutes: 150
+  workspace:
+    clean: all
+  steps:
+  - template: templates/jobs/win-ci-prebuild-steps.yml
+    parameters:
+      EnvSetupScript: $(EnvSetupScript)
+      DownloadCUDA: true
+      BuildArch: $(buildArch)
+      BuildConfig: $(BuildConfig)
+      MachinePool: 'onnxruntime-Win2022-GPU-T4'
+      WithCache: true
+      Today: $(Today)
+
+  - template: templates/jobs/win-ci-build-steps.yml
+    parameters:
+      WithCache: True
+      Today: $(TODAY)
+      AdditionalKey: "gpu-tensorrt | $(BuildConfig)"
+      BuildPyArguments: '--config $(BuildConfig) --build_dir $(Build.BinariesDirectory) --skip_submodule_sync --build_shared_lib --update --cmake_generator "Visual Studio 17 2022" --build_wheel --enable_onnx_tests --use_tensorrt --tensorrt_home="C:\local\TensorRT-8.6.1.6.Windows10.x86_64.cuda-11.8" --cuda_version=11.8 --cuda_home="$(Agent.TempDirectory)\v11.8" --cmake_extra_defines CMAKE_CUDA_ARCHITECTURES=75'
+      MsbuildArguments: $(MsbuildArguments)
+      BuildArch: $(buildArch)
+      Platform: 'x64'
+      BuildConfig: $(BuildConfig)
+
+  - task: PythonScript@0
+    displayName: 'Build wheel'
+    inputs:
+      scriptPath: '$(Build.SourcesDirectory)\setup.py'
+      arguments: 'bdist_wheel'
+      workingDirectory: '$(Build.BinariesDirectory)\$(BuildConfig)\$(BuildConfig)'
+
+  - script: |
+     mklink  /D /J $(Build.BinariesDirectory)\$(BuildConfig)\models $(Build.BinariesDirectory)\models
+     DIR dist\ /S /B > wheel_filename_file
+     set /p WHEEL_FILENAME=<wheel_filename_file
+     del wheel_filename_file
+     python.exe -m pip install -q --upgrade %WHEEL_FILENAME%
+     set PATH=$(Build.BinariesDirectory)\$(BuildConfig)\$(BuildConfig);%PATH%
+     python $(Build.SourcesDirectory)\tools\ci_build\build.py --config $(BuildConfig) --build_dir $(Build.BinariesDirectory) --skip_submodule_sync --build_shared_lib --test --cmake_generator "Visual Studio 17 2022" --build_wheel --enable_onnx_tests --use_tensorrt --tensorrt_home="C:\local\TensorRT-8.6.1.6.Windows10.x86_64.cuda-11.8" --cuda_version=11.8 --cuda_home="$(Agent.TempDirectory)\v11.8" --cmake_extra_defines CMAKE_CUDA_ARCHITECTURES=75
+
+    workingDirectory: '$(Build.BinariesDirectory)\$(BuildConfig)\$(BuildConfig)'
+    displayName: 'Run tests'
